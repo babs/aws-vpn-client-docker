@@ -1,10 +1,13 @@
-FROM ubuntu:20.04 as builder
+ARG UBUNTU_VER=24.04
 
-ARG openvpn_version="2.5.1"
+FROM ubuntu:${UBUNTU_VER} AS builder
+
+ARG OPENVPN_VERSION="2.6.12"
 
 WORKDIR /
 
-RUN apt-get update && \
+RUN set -eu \
+    && apt-get update && \
     apt-get install -y \
     curl \
     unzip \
@@ -16,30 +19,31 @@ RUN apt-get update && \
     libpam0g-dev \
     libtool \
     libssl-dev \
-    net-tools
+    net-tools \
+    pkg-config \
+    libnl-genl-3-dev \
+    libcap-ng-dev \
+    liblz4-dev
 
-RUN curl -L https://github.com/OpenVPN/openvpn/archive/v${openvpn_version}.zip -o openvpn.zip && \
+RUN curl -L https://github.com/OpenVPN/openvpn/archive/v${OPENVPN_VERSION}.zip -o openvpn.zip && \
     unzip openvpn.zip && \
-    mv openvpn-${openvpn_version} openvpn
+    mv openvpn-${OPENVPN_VERSION} openvpn
 
-COPY openvpn-v${openvpn_version}-aws.patch openvpn
+COPY openvpn-v${OPENVPN_VERSION}-aws.patch openvpn
 
 RUN cd openvpn && \
-    patch -p1 < openvpn-v${openvpn_version}-aws.patch && \
+    patch -p1 < openvpn-v${OPENVPN_VERSION}-aws.patch && \
     autoreconf -i -v -f && \
     ./configure && \
     make
 
-RUN curl -L https://golang.org/dl/go1.15.4.linux-amd64.tar.gz -o go.tar.gz && \
-    tar -C /usr/local -xzf go.tar.gz
-
-ENV PATH=$PATH:/usr/local/go/bin
+FROM golang:1.23 AS gobuilder
 
 COPY server.go .
 
-RUN go build server.go
+RUN CGO_ENABLED=0 go build server.go
 
-FROM ubuntu:20.04
+FROM ubuntu:${UBUNTU_VER}
 
 ENV TZ="America/Sao_Paulo"
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
@@ -48,11 +52,15 @@ RUN apt-get update && \
     apt-get install -y \
     dnsutils \
     liblzo2-dev \
+    libnl-genl-3-200 \
+    liblz4-1 \
+    libcap-ng0 \
     openssl \
-    net-tools
+    net-tools \
+    iproute2 iputils-ping iptables curl
 
 COPY --from=builder /openvpn/src/openvpn/openvpn /openvpn
-COPY --from=builder /server /server
+COPY --from=gobuilder /go/server /server
 COPY entrypoint.sh /
 
 COPY update-resolv-conf /etc/openvpn/scripts/
